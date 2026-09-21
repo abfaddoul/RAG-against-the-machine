@@ -22,4 +22,4 @@ lint-strict:
 	uv run mypy . --strict
 
 test:
-	uv run pytest
+	uv run python -m pytest
