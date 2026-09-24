@@ -6,7 +6,10 @@ from src.chunking.langchain_splitters import (
     chunk_python,
 )
 from pathlib import Path
-from src.chunking.corpus import chunk_corpus
+from src.chunking.corpus import (
+    TARGET_CHUNK_SIZE,
+    chunk_corpus,
+)
 
 
 def test_chunk_python_preserves_source_positions() -> None:
@@ -185,3 +188,21 @@ def test_chunk_document_rejects_invalid_chunk_size(
             file_path="data/raw/example.txt",
             max_chunk_size=max_chunk_size,
         )
+
+
+def test_chunk_corpus_respects_target_chunk_size() -> None:
+    """Test using the tuned target below a larger maximum."""
+
+    corpus = {
+        Path("data/raw/long.txt"): "token " * 600,
+    }
+
+    chunks = chunk_corpus(
+        corpus=corpus,
+        max_chunk_size=2000,
+    )
+
+    assert chunks
+
+    for chunk in chunks:
+        assert len(chunk.text) <= TARGET_CHUNK_SIZE
