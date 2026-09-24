@@ -1,0 +1,100 @@
+import fire
+from src.indexing.storage import load_bm25_index
+from src.retrieval.bm25 import retrieve_chunks
+from src.indexing.pipeline import (
+    DEFAULT_CORPUS_DIRECTORY,
+    DEFAULT_INDEX_PATH,
+    DEFAULT_MAX_CHUNK_SIZE,
+    index_corpus,
+)
+from pathlib import Path
+from src.json_io import load_json_model, save_json_model
+from src.models import RagDataset
+from src.retrieval.search import retrieve_dataset
+
+
+def index(
+    max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+    corpus_directory: str = str(DEFAULT_CORPUS_DIRECTORY),
+    index_path: str = str(DEFAULT_INDEX_PATH),
+) -> None:
+    """Build and save the BM25 index."""
+
+    bm25_index = index_corpus(
+        corpus_directory=corpus_directory,
+        index_path=index_path,
+        max_chunk_size=max_chunk_size,
+    )
+
+    print(f"Indexed {len(bm25_index.chunks)} chunks.")
+    print(f"Saved index to: {index_path}")
+
+
+def search(
+    query: str,
+    k: int = 5,
+    index_path: str = str(DEFAULT_INDEX_PATH),
+) -> None:
+    """Search the BM25 index for relevant chunks."""
+
+    bm25_index = load_bm25_index(index_path)
+
+    chunks = retrieve_chunks(
+        index=bm25_index,
+        query=query,
+        k=k,
+    )
+
+    if not chunks:
+        print("No relevant sources found.")
+        return
+
+    for rank, chunk in enumerate(chunks, start=1):
+        print(f"\n[Result {rank}]")
+        print(f"File: {chunk.file_path}")
+        print(
+            f"Characters: {chunk.first_character_index}-"
+            f"{chunk.last_character_index}"
+        )
+        print(chunk.text)
+
+
+def run_cli() -> None:
+    """Expose the application commands through Fire."""
+
+    fire.Fire({
+        "index": index,
+        "search": search,
+        "search_dataset": search_dataset,
+    })
+
+
+def search_dataset(
+    dataset_path: str,
+    k: int,
+    save_directory: str,
+    index_path: str = str(DEFAULT_INDEX_PATH),
+) -> None:
+    """Search every question contained in a dataset."""
+
+    dataset = load_json_model(
+        path=dataset_path,
+        model_class=RagDataset,
+    )
+
+    bm25_index = load_bm25_index(index_path)
+
+    student_search_results = retrieve_dataset(
+        index=bm25_index,
+        dataset=dataset,
+        k=k,
+    )
+
+    output_path = Path(save_directory) / Path(dataset_path).name
+
+    save_json_model(
+        model=student_search_results,
+        path=output_path,
+    )
+
+    print(f"Saved student_search_results to {output_path}")

@@ -1,6 +1,16 @@
+import sys
+
+from src.cli import run_cli
+
+
 def main() -> None:
-    """Run the application entry point."""
-    print("Hello from rag-against-machine!")
+    """Run the application command-line interface."""
+
+    try:
+        run_cli()
+    except (OSError, TypeError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

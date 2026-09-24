@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from tqdm import tqdm
 from src.chunking.langchain_splitters import chunk_document
 from src.chunking.models import Chunk
 
@@ -12,7 +12,11 @@ def chunk_corpus(
 
     chunks: list[Chunk] = []
 
-    for file_path in sorted(corpus):
+    for file_path in tqdm(
+        sorted(corpus),
+        desc="Chunking corpus",
+        unit="file",
+    ):
         file_chunks = chunk_document(
             text=corpus[file_path],
             file_path=str(file_path),

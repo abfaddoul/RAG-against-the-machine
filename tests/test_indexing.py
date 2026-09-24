@@ -3,9 +3,8 @@ from src.chunking.models import Chunk
 from src.indexing.bm25 import build_bm25_index
 import pytest
 from pathlib import Path
-
 import joblib
-
+from src.indexing.pipeline import index_corpus
 from src.indexing.storage import (
     load_bm25_index,
     save_bm25_index,
@@ -146,3 +145,37 @@ def test_load_bm25_index_rejects_wrong_object(
         match="File does not contain a BM25Index",
     ):
         load_bm25_index(index_path)
+
+
+def test_index_corpus_builds_and_saves_index(
+    tmp_path: Path,
+) -> None:
+    """Test the complete indexing pipeline."""
+
+    corpus_directory = tmp_path / "raw"
+    corpus_directory.mkdir()
+
+    source_path = corpus_directory / "example.py"
+    source_path.write_text(
+        "def add(a, b):\n"
+        "    return a + b\n",
+        encoding="utf-8",
+    )
+
+    index_path = tmp_path / "processed" / "bm25_index.joblib"
+
+    index = index_corpus(
+        corpus_directory=corpus_directory,
+        index_path=index_path,
+        max_chunk_size=30,
+    )
+
+    loaded_index = load_bm25_index(index_path)
+
+    assert index_path.exists()
+    assert len(index.chunks) > 0
+    assert loaded_index.chunks == index.chunks
+    assert all(
+        len(chunk.text) <= 30
+        for chunk in loaded_index.chunks
+    )

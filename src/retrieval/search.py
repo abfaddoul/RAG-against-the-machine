@@ -8,6 +8,7 @@ from src.models import (
     UnansweredQuestion,
 )
 from src.retrieval.bm25 import retrieve_chunks
+from tqdm import tqdm
 
 
 def chunk_to_source(chunk: Chunk) -> MinimalSource:
@@ -62,7 +63,11 @@ def retrieve_dataset(
 
     search_results: list[MinimalSearchResults] = []
 
-    for question in dataset.rag_questions:
+    for question in tqdm(
+        dataset.rag_questions,
+        desc="Searching questions",
+        unit="question",
+    ):
         result = retrieve_question(
             index=index,
             question=question,
