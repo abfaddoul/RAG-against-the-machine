@@ -9,8 +9,13 @@ __pycache__/
 htmlcov/
 
 data/raw/
+data/datasets/
 data/processed/
 data/output/
 
 *.log
 .python-version
+
+moulinette
+moulinette-ubuntu
+moulinette-fedora

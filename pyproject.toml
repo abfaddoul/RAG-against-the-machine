@@ -23,3 +23,14 @@ dev = [
 
 [tool.mypy]
 sqlite_cache = false
+exclude = [
+    "^data/",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+norecursedirs = [
+    "data",
+]
