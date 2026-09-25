@@ -3,15 +3,18 @@ name = "rag-against-machine"
 version = "0.1.0"
 description = "A retrieval-augmented generation system for answering questions about codebases."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fire>=0.7.1",
     "joblib>=1.6.0",
     "langchain>=1.4.2",
+    "langchain-huggingface>=1.2.2",
     "langchain-text-splitters>=1.1.2",
     "pydantic>=2.13.5",
     "rank-bm25>=0.2.2",
+    "torch>=2.6.0",
     "tqdm>=4.70.1",
+    "transformers>=4.51.0",
 ]
 
 [dependency-groups]
@@ -34,3 +37,11 @@ testpaths = [
 norecursedirs = [
     "data",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

@@ -12,9 +12,21 @@ from src.json_io import load_json_model, save_json_model
 from src.models import (
     RagDataset,
     StudentSearchResults,
+    UnansweredQuestion,
 )
-from src.retrieval.search import retrieve_dataset
+from src.retrieval.search import (
+    retrieve_dataset,
+    retrieve_question,
+)
 from src.evaluation.recall import calculate_recall_at_k
+from src.generation.answer import (
+    generate_answer,
+    generate_answers,
+)
+from src.generation.model import (
+    DEFAULT_MAX_NEW_TOKENS,
+    load_chat_model,
+)
 
 
 def index(
@@ -133,6 +145,82 @@ def evaluate(
         )
 
 
+def answer(
+    query: str,
+    k: int = 5,
+    index_path: str = str(DEFAULT_INDEX_PATH),
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+) -> None:
+    """Retrieve sources and answer one question."""
+
+    bm25_index = load_bm25_index(index_path)
+
+    question = UnansweredQuestion(
+        question=query,
+    )
+
+    search_result = retrieve_question(
+        index=bm25_index,
+        question=question,
+        k=k,
+    )
+
+    model = load_chat_model(
+        max_new_tokens=max_new_tokens,
+    )
+
+    generated_answer = generate_answer(
+        search_result=search_result,
+        model=model,
+    )
+
+    print("\nAnswer:")
+    print(generated_answer.answer)
+
+    print("\nSources:")
+
+    for source in generated_answer.retrieved_sources:
+        print(
+            f"- {source.file_path} "
+            f"({source.first_character_index}-"
+            f"{source.last_character_index})"
+        )
+
+
+def answer_dataset(
+    student_search_results_path: str,
+    save_directory: str,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+) -> None:
+    """Generate answers for retrieved dataset results."""
+
+    student_results = load_json_model(
+        path=student_search_results_path,
+        model_class=StudentSearchResults,
+    )
+
+    model = load_chat_model(
+        max_new_tokens=max_new_tokens,
+    )
+
+    results_with_answers = generate_answers(
+        student_results=student_results,
+        model=model,
+    )
+
+    output_path = (
+        Path(save_directory)
+        / Path(student_search_results_path).name
+    )
+
+    save_json_model(
+        model=results_with_answers,
+        path=output_path,
+    )
+
+    print(f"Saved generated answers to {output_path}")
+
+
 def run_cli() -> None:
     """Run the command-line interface."""
 
@@ -140,5 +228,7 @@ def run_cli() -> None:
         "index": index,
         "search": search,
         "search_dataset": search_dataset,
+        "answer": answer,
+        "answer_dataset": answer_dataset,
         "evaluate": evaluate,
     })
