@@ -1,12 +1,6 @@
 import fire
 from src.indexing.storage import load_bm25_index
 from src.retrieval.bm25 import retrieve_chunks
-from src.indexing.pipeline import (
-    DEFAULT_CORPUS_DIRECTORY,
-    DEFAULT_INDEX_PATH,
-    DEFAULT_MAX_CHUNK_SIZE,
-    index_corpus,
-)
 from pathlib import Path
 from src.json_io import load_json_model, save_json_model
 from src.models import (
@@ -27,6 +21,25 @@ from src.generation.model import (
     DEFAULT_MAX_NEW_TOKENS,
     load_chat_model,
 )
+from src.embeddings.model import DEFAULT_EMBEDDING_MODEL_ID
+from src.indexing.hnsw import (
+    DEFAULT_HNSW_EF_CONSTRUCTION,
+    DEFAULT_HNSW_EF_SEARCH,
+    DEFAULT_HNSW_M,
+)
+from src.indexing.hnsw_storage import load_hnsw_index
+from src.indexing.pipeline import (
+    DEFAULT_CORPUS_DIRECTORY,
+    DEFAULT_INDEX_PATH,
+    DEFAULT_MAX_CHUNK_SIZE,
+    DEFAULT_SEMANTIC_INDEX_DIRECTORY,
+    index_corpus,
+    index_semantic_corpus,
+)
+from src.indexing.semantic import (
+    DEFAULT_EMBEDDING_BATCH_SIZE,
+)
+from src.retrieval.semantic import retrieve_semantic_chunks
 
 
 def index(
@@ -221,12 +234,79 @@ def answer_dataset(
     print(f"Saved generated answers to {output_path}")
 
 
+def index_semantic(
+    max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+    corpus_directory: str = str(DEFAULT_CORPUS_DIRECTORY),
+    index_directory: str = str(
+        DEFAULT_SEMANTIC_INDEX_DIRECTORY
+    ),
+    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID,
+    batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
+    m: int = DEFAULT_HNSW_M,
+    ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
+    ef_search: int = DEFAULT_HNSW_EF_SEARCH,
+) -> None:
+    """Build and save the semantic HNSW index."""
+
+    semantic_index = index_semantic_corpus(
+        corpus_directory=corpus_directory,
+        index_directory=index_directory,
+        max_chunk_size=max_chunk_size,
+        embedding_model_id=embedding_model_id,
+        batch_size=batch_size,
+        m=m,
+        ef_construction=ef_construction,
+        ef_search=ef_search,
+    )
+
+    print(
+        f"Indexed {len(semantic_index.chunks)} "
+        f"semantic chunks."
+    )
+    print(f"Saved semantic index to: {index_directory}")
+
+
+def search_semantic(
+    query: str,
+    k: int = 5,
+    index_directory: str = str(
+        DEFAULT_SEMANTIC_INDEX_DIRECTORY
+    ),
+) -> None:
+    """Search the semantic HNSW index."""
+
+    semantic_index = load_hnsw_index(
+        index_directory,
+    )
+
+    chunks = retrieve_semantic_chunks(
+        index=semantic_index,
+        query=query,
+        k=k,
+    )
+
+    if not chunks:
+        print("No relevant sources found.")
+        return
+
+    for rank, chunk in enumerate(chunks, start=1):
+        print(f"\n[Result {rank}]")
+        print(f"File: {chunk.file_path}")
+        print(
+            f"Characters: {chunk.first_character_index}-"
+            f"{chunk.last_character_index}"
+        )
+        print(chunk.text)
+
+
 def run_cli() -> None:
     """Run the command-line interface."""
 
     fire.Fire({
         "index": index,
+        "index_semantic": index_semantic,
         "search": search,
+        "search_semantic": search_semantic,
         "search_dataset": search_dataset,
         "answer": answer,
         "answer_dataset": answer_dataset,
