@@ -40,6 +40,12 @@ from src.indexing.semantic import (
     DEFAULT_EMBEDDING_BATCH_SIZE,
 )
 from src.retrieval.semantic import retrieve_semantic_chunks
+from src.chunking.models import Chunk
+from src.retrieval.hybrid import (
+    DEFAULT_CANDIDATE_MULTIPLIER,
+    DEFAULT_RRF_CONSTANT,
+    retrieve_hybrid_chunks,
+)
 
 
 def index(
@@ -299,6 +305,55 @@ def search_semantic(
         print(chunk.text)
 
 
+def _print_chunks(chunks: list[Chunk]) -> None:
+    """Print retrieved chunks."""
+
+    if not chunks:
+        print("No relevant sources found.")
+        return
+
+    for rank, chunk in enumerate(chunks, start=1):
+        print(f"\n[Result {rank}]")
+        print(f"File: {chunk.file_path}")
+        print(
+            f"Characters: {chunk.first_character_index}-"
+            f"{chunk.last_character_index}"
+        )
+        print(chunk.text)
+
+
+def search_hybrid(
+    query: str,
+    k: int = 5,
+    index_path: str = str(DEFAULT_INDEX_PATH),
+    semantic_index_directory: str = str(
+        DEFAULT_SEMANTIC_INDEX_DIRECTORY
+    ),
+    rrf_constant: int = DEFAULT_RRF_CONSTANT,
+    candidate_multiplier: int = (
+        DEFAULT_CANDIDATE_MULTIPLIER
+    ),
+) -> None:
+    """Search using BM25 and semantic retrieval."""
+
+    bm25_index = load_bm25_index(index_path)
+
+    semantic_index = load_hnsw_index(
+        semantic_index_directory,
+    )
+
+    chunks = retrieve_hybrid_chunks(
+        bm25_index=bm25_index,
+        semantic_index=semantic_index,
+        query=query,
+        k=k,
+        rrf_constant=rrf_constant,
+        candidate_multiplier=candidate_multiplier,
+    )
+
+    _print_chunks(chunks)
+
+
 def run_cli() -> None:
     """Run the command-line interface."""
 
@@ -307,6 +362,7 @@ def run_cli() -> None:
         "index_semantic": index_semantic,
         "search": search,
         "search_semantic": search_semantic,
+        "search_hybrid": search_hybrid,
         "search_dataset": search_dataset,
         "answer": answer,
         "answer_dataset": answer_dataset,
