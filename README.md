@@ -443,3 +443,35 @@ moulinette.
 
 - 42 login: `abdfaddo`
 - GitHub: [abfaddoul](https://github.com/abfaddoul)
+
+## Optional Features
+
+Bonus implementation lives in `src/bonus/`, with its tests in `tests/bonus/`.
+The mandatory BM25 pipeline and commands keep their original implementation.
+
+| File | Responsibility |
+|---|---|
+| `embeddings.py` | Load MiniLM on CPU and embed chunk batches |
+| `indexing.py` | Build HNSW and index the semantic corpus |
+| `storage.py` | Save and load the semantic graph and metadata |
+| `search.py` | Embed a query and retrieve nearest chunks |
+| `hybrid.py` | Combine BM25 and semantic rankings with RRF |
+| `incremental.py` | Detect file changes and update their semantic vectors |
+| `cli.py` | Connect the four existing bonus commands |
+
+```bash
+uv run python -m src index_semantic
+uv run python -m src search_semantic "How does vLLM load LoRA adapters?" --k 5
+uv run python -m src search_hybrid "How does vLLM load LoRA adapters?" --k 5
+uv run python -m src index_incremental
+```
+
+Incremental indexing updates the semantic index only. If the corpus changes and
+hybrid search must use current lexical results too, run the mandatory `index`
+command to refresh BM25. Incremental indexing requires the state saved by
+`index_semantic`; it reports a clear error if that state is missing.
+
+Existing semantic metadata and incremental state remain loadable through two
+small compatibility modules in `src/indexing/`. They contain no indexing logic.
+Caching and the local HTTP API are still pending. See `REFACTOR_NOTES.md` for the
+scope, verification results, and how to apply this refactor to an existing checkout.

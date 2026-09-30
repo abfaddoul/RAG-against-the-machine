@@ -1,11 +1,9 @@
 import pytest
 from langchain_core.embeddings import Embeddings
 
+from src.bonus.embeddings import embed_chunks
+from src.bonus.indexing import build_semantic_index
 from src.chunking.models import Chunk
-from src.indexing.semantic import (
-    build_semantic_index,
-    embed_chunks,
-)
 
 
 class FakeEmbeddingModel(Embeddings):
@@ -14,27 +12,14 @@ class FakeEmbeddingModel(Embeddings):
     def __init__(self) -> None:
         self.received_texts: list[str] = []
 
-    def embed_documents(
-        self,
-        texts: list[str],
-    ) -> list[list[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed test documents."""
 
         self.received_texts.extend(texts)
 
-        return [
-            (
-                [1.0, 0.0]
-                if "LoRA" in text
-                else [0.0, 1.0]
-            )
-            for text in texts
-        ]
+        return [([1.0, 0.0] if "LoRA" in text else [0.0, 1.0]) for text in texts]
 
-    def embed_query(
-        self,
-        text: str,
-    ) -> list[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Embed a test query."""
 
         if "LoRA" in text:
@@ -69,15 +54,10 @@ def test_build_semantic_index_embeds_chunks() -> None:
     embedding_model = FakeEmbeddingModel()
 
     index = build_semantic_index(
-        chunks=chunks,
-        embedding_model=embedding_model,
-        batch_size=1,
+        chunks=chunks, embedding_model=embedding_model, batch_size=1
     )
 
-    assert embedding_model.received_texts == [
-        "LoRA adapters",
-        "Chocolate cake",
-    ]
+    assert embedding_model.received_texts == ["LoRA adapters", "Chocolate cake"]
     assert index.chunks == chunks
     assert index.dimension == 2
     assert index.hnsw.get_current_count() == 2
@@ -86,10 +66,7 @@ def test_build_semantic_index_embeds_chunks() -> None:
 def test_embed_chunks_rejects_invalid_batch_size() -> None:
     """Test rejecting a non-positive batch size."""
 
-    with pytest.raises(
-        ValueError,
-        match="batch_size must be positive",
-    ):
+    with pytest.raises(ValueError, match="batch_size must be positive"):
         embed_chunks(
             chunks=build_test_chunks(),
             embedding_model=FakeEmbeddingModel(),

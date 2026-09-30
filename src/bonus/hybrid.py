@@ -1,35 +1,25 @@
 from langchain_core.embeddings import Embeddings
 
+from src.bonus.indexing import HNSWIndex
+from src.bonus.search import retrieve_semantic_chunks
 from src.chunking.models import Chunk
 from src.indexing.bm25 import BM25Index
-from src.indexing.hnsw import HNSWIndex
 from src.retrieval.bm25 import retrieve_chunks
-from src.retrieval.semantic import (
-    retrieve_semantic_chunks,
-)
-
 
 DEFAULT_RRF_CONSTANT = 60
 DEFAULT_CANDIDATE_MULTIPLIER = 2
 MINIMUM_CANDIDATE_COUNT = 10
-
 ChunkKey = tuple[str, int, int]
 
 
 def chunk_key(chunk: Chunk) -> ChunkKey:
     """Return the stable identity of a chunk."""
 
-    return (
-        chunk.file_path,
-        chunk.first_character_index,
-        chunk.last_character_index,
-    )
+    return (chunk.file_path, chunk.first_character_index, chunk.last_character_index)
 
 
 def reciprocal_rank_fusion(
-    rankings: list[list[Chunk]],
-    k: int,
-    rrf_constant: int = DEFAULT_RRF_CONSTANT,
+    rankings: list[list[Chunk]], k: int, rrf_constant: int = DEFAULT_RRF_CONSTANT
 ) -> list[Chunk]:
     """Fuse multiple chunk rankings using RRF."""
 
@@ -57,21 +47,11 @@ def reciprocal_rank_fusion(
             seen.add(identity)
             chunks.setdefault(identity, chunk)
 
-            scores[identity] = (
-                scores.get(identity, 0.0)
-                + 1.0 / (rrf_constant + rank)
-            )
+            scores[identity] = scores.get(identity, 0.0) + 1.0 / (rrf_constant + rank)
 
-    ranked_identities = sorted(
-        scores,
-        key=scores.__getitem__,
-        reverse=True,
-    )
+    ranked_identities = sorted(scores, key=scores.__getitem__, reverse=True)
 
-    return [
-        chunks[identity]
-        for identity in ranked_identities[:k]
-    ]
+    return [chunks[identity] for identity in ranked_identities[:k]]
 
 
 def retrieve_hybrid_chunks(
@@ -81,9 +61,7 @@ def retrieve_hybrid_chunks(
     k: int,
     embedding_model: Embeddings | None = None,
     rrf_constant: int = DEFAULT_RRF_CONSTANT,
-    candidate_multiplier: int = (
-        DEFAULT_CANDIDATE_MULTIPLIER
-    ),
+    candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER,
 ) -> list[Chunk]:
     """Combine BM25 and semantic retrieval results."""
 
@@ -91,23 +69,14 @@ def retrieve_hybrid_chunks(
         raise ValueError("k cannot be negative")
 
     if candidate_multiplier <= 0:
-        raise ValueError(
-            "candidate_multiplier must be positive"
-        )
+        raise ValueError("candidate_multiplier must be positive")
 
     if k == 0:
         return []
 
-    candidate_count = max(
-        MINIMUM_CANDIDATE_COUNT,
-        k * candidate_multiplier,
-    )
+    candidate_count = max(MINIMUM_CANDIDATE_COUNT, k * candidate_multiplier)
 
-    bm25_chunks = retrieve_chunks(
-        index=bm25_index,
-        query=query,
-        k=candidate_count,
-    )
+    bm25_chunks = retrieve_chunks(index=bm25_index, query=query, k=candidate_count)
 
     semantic_chunks = retrieve_semantic_chunks(
         index=semantic_index,
@@ -117,10 +86,5 @@ def retrieve_hybrid_chunks(
     )
 
     return reciprocal_rank_fusion(
-        rankings=[
-            bm25_chunks,
-            semantic_chunks,
-        ],
-        k=k,
-        rrf_constant=rrf_constant,
+        rankings=[bm25_chunks, semantic_chunks], k=k, rrf_constant=rrf_constant
     )

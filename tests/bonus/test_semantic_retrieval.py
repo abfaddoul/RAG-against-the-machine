@@ -1,13 +1,8 @@
 from langchain_core.embeddings import Embeddings
 
+from src.bonus.indexing import HNSWIndex, build_hnsw_index
+from src.bonus.search import retrieve_semantic_chunks
 from src.chunking.models import Chunk
-from src.indexing.hnsw import (
-    HNSWIndex,
-    build_hnsw_index,
-)
-from src.retrieval.semantic import (
-    retrieve_semantic_chunks,
-)
 
 
 class FakeQueryEmbeddingModel(Embeddings):
@@ -16,21 +11,12 @@ class FakeQueryEmbeddingModel(Embeddings):
     def __init__(self) -> None:
         self.received_query: str | None = None
 
-    def embed_documents(
-        self,
-        texts: list[str],
-    ) -> list[list[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed fake documents."""
 
-        return [
-            [1.0, 0.0]
-            for _ in texts
-        ]
+        return [[1.0, 0.0] for _ in texts]
 
-    def embed_query(
-        self,
-        text: str,
-    ) -> list[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Embed a fake query."""
 
         self.received_query = text
@@ -58,15 +44,9 @@ def build_semantic_retrieval_index() -> HNSWIndex:
             text="Chocolate cake",
         ),
     ]
-    vectors = [
-        [1.0, 0.0],
-        [0.0, 1.0],
-    ]
+    vectors = [[1.0, 0.0], [0.0, 1.0]]
 
-    return build_hnsw_index(
-        chunks=chunks,
-        vectors=vectors,
-    )
+    return build_hnsw_index(chunks=chunks, vectors=vectors)
 
 
 def test_retrieve_semantic_chunks_embeds_query() -> None:
@@ -76,19 +56,11 @@ def test_retrieve_semantic_chunks_embeds_query() -> None:
     embedding_model = FakeQueryEmbeddingModel()
 
     retrieved = retrieve_semantic_chunks(
-        index=index,
-        query="How does LoRA work?",
-        k=1,
-        embedding_model=embedding_model,
+        index=index, query="How does LoRA work?", k=1, embedding_model=embedding_model
     )
 
-    assert (
-        embedding_model.received_query
-        == "How does LoRA work?"
-    )
-    assert retrieved == [
-        index.chunks[0],
-    ]
+    assert embedding_model.received_query == "How does LoRA work?"
+    assert retrieved == [index.chunks[0]]
 
 
 def test_retrieve_semantic_chunks_handles_empty_query() -> None:
@@ -98,10 +70,7 @@ def test_retrieve_semantic_chunks_handles_empty_query() -> None:
     embedding_model = FakeQueryEmbeddingModel()
 
     retrieved = retrieve_semantic_chunks(
-        index=index,
-        query="   ",
-        k=2,
-        embedding_model=embedding_model,
+        index=index, query="   ", k=2, embedding_model=embedding_model
     )
 
     assert retrieved == []

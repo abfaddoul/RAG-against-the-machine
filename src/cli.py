@@ -1,51 +1,36 @@
-import fire
-from src.indexing.storage import load_bm25_index
-from src.retrieval.bm25 import retrieve_chunks
+import sys
 from pathlib import Path
-from src.json_io import load_json_model, save_json_model
-from src.models import (
-    RagDataset,
-    StudentSearchResults,
-    UnansweredQuestion,
-)
-from src.retrieval.search import (
-    retrieve_dataset,
-    retrieve_question,
-)
+
+import fire
+
+from src.chunking.models import Chunk
 from src.evaluation.recall import calculate_recall_at_k
-from src.generation.answer import (
-    generate_answer,
-    generate_answers,
-)
-from src.generation.model import (
-    DEFAULT_MAX_NEW_TOKENS,
-    load_chat_model,
-)
-from src.embeddings.model import DEFAULT_EMBEDDING_MODEL_ID
-from src.indexing.hnsw import (
-    DEFAULT_HNSW_EF_CONSTRUCTION,
-    DEFAULT_HNSW_EF_SEARCH,
-    DEFAULT_HNSW_M,
-)
-from src.indexing.hnsw_storage import load_hnsw_index
+from src.generation.answer import generate_answer, generate_answers
+from src.generation.model import DEFAULT_MAX_NEW_TOKENS, load_chat_model
 from src.indexing.pipeline import (
     DEFAULT_CORPUS_DIRECTORY,
     DEFAULT_INDEX_PATH,
     DEFAULT_MAX_CHUNK_SIZE,
-    DEFAULT_SEMANTIC_INDEX_DIRECTORY,
     index_corpus,
-    index_semantic_corpus,
 )
-from src.indexing.semantic import (
-    DEFAULT_EMBEDDING_BATCH_SIZE,
-)
-from src.retrieval.semantic import retrieve_semantic_chunks
-from src.chunking.models import Chunk
-from src.retrieval.hybrid import (
-    DEFAULT_CANDIDATE_MULTIPLIER,
-    DEFAULT_RRF_CONSTANT,
-    retrieve_hybrid_chunks,
-)
+from src.indexing.storage import load_bm25_index
+from src.json_io import load_json_model, save_json_model
+from src.models import RagDataset, StudentSearchResults, UnansweredQuestion
+from src.retrieval.bm25 import retrieve_chunks
+from src.retrieval.search import retrieve_dataset, retrieve_question
+
+
+def print_chunks(chunks: list[Chunk]) -> None:
+    """Print retrieved chunks."""
+
+    for rank, chunk in enumerate(chunks, start=1):
+        print(f"\n[Result {rank}]")
+        print(f"File: {chunk.file_path}")
+        print(
+            f"Characters: {chunk.first_character_index}-"
+            f"{chunk.last_character_index}"
+        )
+        print(chunk.text)
 
 
 def index(
@@ -84,14 +69,7 @@ def search(
         print("No relevant sources found.")
         return
 
-    for rank, chunk in enumerate(chunks, start=1):
-        print(f"\n[Result {rank}]")
-        print(f"File: {chunk.file_path}")
-        print(
-            f"Characters: {chunk.first_character_index}-"
-            f"{chunk.last_character_index}"
-        )
-        print(chunk.text)
+    print_chunks(chunks)
 
 
 def search_dataset(
@@ -115,14 +93,20 @@ def search_dataset(
         k=k,
     )
 
-    output_path = Path(save_directory) / Path(dataset_path).name
+    output_path = (
+        Path(save_directory)
+        / Path(dataset_path).name
+    )
 
     save_json_model(
         model=student_search_results,
         path=output_path,
     )
 
-    print(f"Saved student_search_results to {output_path}")
+    print(
+        "Saved student_search_results to "
+        f"{output_path}"
+    )
 
 
 def evaluate(
@@ -237,132 +221,24 @@ def answer_dataset(
         path=output_path,
     )
 
-    print(f"Saved generated answers to {output_path}")
-
-
-def index_semantic(
-    max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
-    corpus_directory: str = str(DEFAULT_CORPUS_DIRECTORY),
-    index_directory: str = str(
-        DEFAULT_SEMANTIC_INDEX_DIRECTORY
-    ),
-    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID,
-    batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
-    m: int = DEFAULT_HNSW_M,
-    ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
-    ef_search: int = DEFAULT_HNSW_EF_SEARCH,
-) -> None:
-    """Build and save the semantic HNSW index."""
-
-    semantic_index = index_semantic_corpus(
-        corpus_directory=corpus_directory,
-        index_directory=index_directory,
-        max_chunk_size=max_chunk_size,
-        embedding_model_id=embedding_model_id,
-        batch_size=batch_size,
-        m=m,
-        ef_construction=ef_construction,
-        ef_search=ef_search,
-    )
-
     print(
-        f"Indexed {len(semantic_index.chunks)} "
-        f"semantic chunks."
+        f"Saved generated answers to {output_path}"
     )
-    print(f"Saved semantic index to: {index_directory}")
-
-
-def search_semantic(
-    query: str,
-    k: int = 5,
-    index_directory: str = str(
-        DEFAULT_SEMANTIC_INDEX_DIRECTORY
-    ),
-) -> None:
-    """Search the semantic HNSW index."""
-
-    semantic_index = load_hnsw_index(
-        index_directory,
-    )
-
-    chunks = retrieve_semantic_chunks(
-        index=semantic_index,
-        query=query,
-        k=k,
-    )
-
-    if not chunks:
-        print("No relevant sources found.")
-        return
-
-    for rank, chunk in enumerate(chunks, start=1):
-        print(f"\n[Result {rank}]")
-        print(f"File: {chunk.file_path}")
-        print(
-            f"Characters: {chunk.first_character_index}-"
-            f"{chunk.last_character_index}"
-        )
-        print(chunk.text)
-
-
-def _print_chunks(chunks: list[Chunk]) -> None:
-    """Print retrieved chunks."""
-
-    if not chunks:
-        print("No relevant sources found.")
-        return
-
-    for rank, chunk in enumerate(chunks, start=1):
-        print(f"\n[Result {rank}]")
-        print(f"File: {chunk.file_path}")
-        print(
-            f"Characters: {chunk.first_character_index}-"
-            f"{chunk.last_character_index}"
-        )
-        print(chunk.text)
-
-
-def search_hybrid(
-    query: str,
-    k: int = 5,
-    index_path: str = str(DEFAULT_INDEX_PATH),
-    semantic_index_directory: str = str(
-        DEFAULT_SEMANTIC_INDEX_DIRECTORY
-    ),
-    rrf_constant: int = DEFAULT_RRF_CONSTANT,
-    candidate_multiplier: int = (
-        DEFAULT_CANDIDATE_MULTIPLIER
-    ),
-) -> None:
-    """Search using BM25 and semantic retrieval."""
-
-    bm25_index = load_bm25_index(index_path)
-
-    semantic_index = load_hnsw_index(
-        semantic_index_directory,
-    )
-
-    chunks = retrieve_hybrid_chunks(
-        bm25_index=bm25_index,
-        semantic_index=semantic_index,
-        query=query,
-        k=k,
-        rrf_constant=rrf_constant,
-        candidate_multiplier=candidate_multiplier,
-    )
-
-    _print_chunks(chunks)
 
 
 def run_cli() -> None:
     """Run the command-line interface."""
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "index_semantic", "index_incremental", "search_semantic", "search_hybrid",
+    }:
+        from src.bonus.cli import run_cli as run_bonus_cli
+
+        run_bonus_cli()
+        return
 
     fire.Fire({
         "index": index,
-        "index_semantic": index_semantic,
         "search": search,
-        "search_semantic": search_semantic,
-        "search_hybrid": search_hybrid,
         "search_dataset": search_dataset,
         "answer": answer,
         "answer_dataset": answer_dataset,
