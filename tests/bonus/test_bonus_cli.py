@@ -1,65 +1,63 @@
-from types import SimpleNamespace
+from pathlib import Path
+import sys
 
 import pytest
 
-from src.bonus.cli import index_incremental
-from src.bonus.incremental import FileChanges
+from conftest import RecordingEmbeddings
+from src.bonus import cli
+from src.bonus.indexing import load_semantic_index
+from src.cli import run_cli
+from src.indexing.pipeline import index_corpus
 
 
-def test_index_incremental_prints_changes(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_bonus_commands_use_real_storage_and_incremental_updates(
+    corpus: Path, tmp_path: Path, embeddings: RecordingEmbeddings,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test reporting incremental index changes."""
+    def fake_load_model(batch_size: int = 32) -> RecordingEmbeddings:
+        return embeddings
 
-    calls: dict[str, object] = {}
+    monkeypatch.setattr("src.bonus.indexing.load_embedding_model", fake_load_model)
+    source = corpus / "a.txt"
+    source.write_text("apple", encoding="utf-8")
+    directory = tmp_path / "index"
+    bm25_path = tmp_path / "bm25.joblib"
+    index_corpus(corpus, bm25_path)
 
-    def fake_update_semantic_corpus(
-        corpus_directory: str,
-        index_directory: str,
-        max_chunk_size: int,
-        batch_size: int,
-        state_path: str | None,
-    ) -> tuple[SimpleNamespace, FileChanges]:
-        calls["corpus_directory"] = corpus_directory
-        calls["index_directory"] = index_directory
-        calls["max_chunk_size"] = max_chunk_size
-        calls["batch_size"] = batch_size
-        calls["state_path"] = state_path
+    cli.index_semantic(corpus_directory=str(corpus), index_directory=str(directory))
+    assert "Indexed 1 semantic chunks" in capsys.readouterr().out
+    cli.search_semantic("apple", index_directory=str(directory))
+    assert str(source) in capsys.readouterr().out
+    cli.search_hybrid("apple", index_path=str(bm25_path),
+                      semantic_index_directory=str(directory))
+    assert str(source) in capsys.readouterr().out
 
-        return (
-            SimpleNamespace(active_count=4),
-            FileChanges(
-                added=["added.py"],
-                modified=["modified.py"],
-                deleted=["deleted.py"],
-                unchanged=["unchanged.py"],
-            ),
-        )
-
-    monkeypatch.setattr(
-        "src.bonus.cli.update_semantic_corpus", fake_update_semantic_corpus
-    )
-
-    index_incremental(
-        corpus_directory="test-corpus",
-        index_directory="test-index",
-        max_chunk_size=500,
-        batch_size=8,
-        state_path="test-state.joblib",
-    )
-
+    embeddings.texts.clear()
+    cli.index_incremental(corpus_directory=str(corpus), index_directory=str(directory))
+    assert "No corpus changes detected" in capsys.readouterr().out
+    assert embeddings.texts == []
+    source.write_text("banana", encoding="utf-8")
+    cli.index_incremental(corpus_directory=str(corpus), index_directory=str(directory))
     output = capsys.readouterr().out
+    assert "Chunks: 1 added, 0 updated, 1 deleted, 0 unchanged" in output
+    assert embeddings.texts == ["banana"]
+    assert load_semantic_index(directory, embeddings).get()["documents"] == ["banana"]
 
-    assert calls == {
-        "corpus_directory": "test-corpus",
-        "index_directory": "test-index",
-        "max_chunk_size": 500,
-        "batch_size": 8,
-        "state_path": "test-state.joblib",
-    }
 
-    assert "Added: added.py" in output
-    assert "Modified: modified.py" in output
-    assert "Deleted: deleted.py" in output
-    assert "Active semantic chunks: 4" in output
-    assert "Saved semantic index to: test-index" in output
+def test_fire_routes_the_existing_bonus_command(
+    corpus: Path, tmp_path: Path, embeddings: RecordingEmbeddings,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_load_model(batch_size: int = 32) -> RecordingEmbeddings:
+        return embeddings
+
+    monkeypatch.setattr("src.bonus.indexing.load_embedding_model", fake_load_model)
+    (corpus / "a.txt").write_text("apple", encoding="utf-8")
+    directory = tmp_path / "index"
+    monkeypatch.setattr(sys, "argv", [
+        "src", "index_semantic", f"--corpus_directory={corpus}",
+        f"--index_directory={directory}", "--batch_size=2",
+    ])
+    run_cli()
+    assert "Indexed 1 semantic chunks" in capsys.readouterr().out
+    assert (directory / "records.sqlite3").is_file()

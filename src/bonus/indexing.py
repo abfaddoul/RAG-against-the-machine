@@ -1,123 +1,61 @@
-from dataclasses import dataclass
+import json
 from pathlib import Path
 
-import hnswlib
-import numpy as np
+from chromadb.config import Settings
+from langchain_chroma import Chroma
+from langchain_classic.indexes import SQLRecordManager
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.indexing import IndexingResult, index
+from sqlalchemy.engine import URL
 
-from src.bonus.embeddings import (
-    DEFAULT_EMBEDDING_BATCH_SIZE,
-    DEFAULT_EMBEDDING_MODEL_ID,
-    embed_chunks,
-    load_embedding_model,
-)
+from src.bonus.embeddings import DEFAULT_EMBEDDING_BATCH_SIZE, load_embedding_model
 from src.chunking.corpus import chunk_corpus
 from src.chunking.models import Chunk
 from src.indexing.pipeline import DEFAULT_CORPUS_DIRECTORY, DEFAULT_MAX_CHUNK_SIZE
 from src.ingestion.files import load_corpus
 
-DEFAULT_HNSW_M = 16
-DEFAULT_HNSW_EF_CONSTRUCTION = 200
-DEFAULT_HNSW_EF_SEARCH = 50
 DEFAULT_SEMANTIC_INDEX_DIRECTORY = Path("data/processed/semantic_index")
+COLLECTION_NAME = "rag_chunks"
 
 
-@dataclass
-class HNSWIndex:
-    """Store an HNSW index with its aligned chunks."""
-
-    chunks: list[Chunk]
-    hnsw: hnswlib.Index
-    dimension: int
-    embedding_model_id: str
-    ef_search: int
-    active_count: int
+def chunk_to_document(chunk: Chunk) -> Document:
+    """Preserve source offsets and identity across both retrievers."""
+    metadata = chunk.model_dump(exclude={"text"})
+    metadata["chunk_id"] = json.dumps([
+        chunk.file_path, chunk.first_character_index, chunk.last_character_index,
+    ])
+    return Document(page_content=chunk.text, metadata=metadata)
 
 
-def build_hnsw_index(
-    chunks: list[Chunk],
-    vectors: list[list[float]],
-    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID,
-    m: int = DEFAULT_HNSW_M,
-    ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
-    ef_search: int = DEFAULT_HNSW_EF_SEARCH,
-) -> HNSWIndex:
-    """Build an HNSW index from chunks and vectors."""
-
-    if not chunks:
-        raise ValueError("Cannot build an index without chunks")
-
-    if len(chunks) != len(vectors):
-        raise ValueError("Chunks and vectors must have equal lengths")
-
-    if not embedding_model_id.strip():
-        raise ValueError("embedding_model_id cannot be empty")
-
-    if m <= 0:
-        raise ValueError("m must be positive")
-
-    if ef_construction <= 0:
-        raise ValueError("ef_construction must be positive")
-
-    if ef_search <= 0:
-        raise ValueError("ef_search must be positive")
-
-    try:
-        vector_array = np.asarray(vectors, dtype=np.float32)
-    except ValueError as error:
-        raise ValueError("Vectors must have equal dimensions") from error
-
-    if vector_array.ndim != 2 or vector_array.shape[1] == 0:
-        raise ValueError("Vectors must form a non-empty 2D matrix")
-
-    if not np.isfinite(vector_array).all():
-        raise ValueError("Vectors must contain finite values")
-
-    dimension = int(vector_array.shape[1])
-
-    hnsw_index = hnswlib.Index(space="cosine", dim=dimension)
-
-    hnsw_index.init_index(
-        max_elements=len(chunks), M=m, ef_construction=ef_construction
-    )
-
-    chunk_ids = np.arange(len(chunks))
-
-    hnsw_index.add_items(vector_array, chunk_ids)
-    hnsw_index.set_ef(ef_search)
-
-    return HNSWIndex(
-        chunks=list(chunks),
-        hnsw=hnsw_index,
-        dimension=dimension,
-        embedding_model_id=embedding_model_id,
-        ef_search=ef_search,
-        active_count=len(chunks),
-    )
+def document_to_chunk(document: Document) -> Chunk:
+    """Restore the project's source model from a LangChain document."""
+    return Chunk.model_validate({**document.metadata, "text": document.page_content})
 
 
-def build_semantic_index(
-    chunks: list[Chunk],
-    embedding_model: Embeddings,
-    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID,
+def load_semantic_index(
+    index_directory: str | Path = DEFAULT_SEMANTIC_INDEX_DIRECTORY,
+    embedding_model: Embeddings | None = None,
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
-    m: int = DEFAULT_HNSW_M,
-    ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
-    ef_search: int = DEFAULT_HNSW_EF_SEARCH,
-) -> HNSWIndex:
-    """Embed chunks and build their HNSW index."""
-
-    vectors = embed_chunks(
-        chunks=chunks, embedding_model=embedding_model, batch_size=batch_size
-    )
-
-    return build_hnsw_index(
-        chunks=chunks,
-        vectors=vectors,
-        embedding_model_id=embedding_model_id,
-        m=m,
-        ef_construction=ef_construction,
-        ef_search=ef_search,
+    *,
+    create: bool = False,
+) -> Chroma:
+    """Open a local persistent HNSW collection with CPU embeddings."""
+    directory = Path(index_directory)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if not create and not (directory / "chroma.sqlite3").is_file():
+        raise FileNotFoundError("Semantic index missing. Run index_semantic first.")
+    return Chroma(
+        collection_name=COLLECTION_NAME,
+        persist_directory=str(directory.resolve()),
+        embedding_function=(
+            embedding_model if embedding_model is not None
+            else load_embedding_model(batch_size=batch_size)
+        ),
+        collection_configuration={"hnsw": {"space": "cosine"}},
+        client_settings=Settings(anonymized_telemetry=False),
+        create_collection_if_not_exists=create,
     )
 
 
@@ -125,49 +63,46 @@ def index_semantic_corpus(
     corpus_directory: str | Path = DEFAULT_CORPUS_DIRECTORY,
     index_directory: str | Path = DEFAULT_SEMANTIC_INDEX_DIRECTORY,
     max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
-    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID,
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
-    m: int = DEFAULT_HNSW_M,
-    ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
-    ef_search: int = DEFAULT_HNSW_EF_SEARCH,
     embedding_model: Embeddings | None = None,
-    state_path: str | Path | None = None,
-) -> HNSWIndex:
-    """Build and save a semantic HNSW corpus index."""
+    *,
+    incremental: bool = False,
+) -> IndexingResult:
+    """Let LangChain hash, deduplicate, embed and clean up corpus chunks.
 
-    from src.bonus.incremental import (
-        build_incremental_state,
-        hash_corpus_files,
-        save_incremental_state,
+    Full cleanup sees the complete corpus, including deletions. Incremental
+    runs skip existing chunk hashes, so only changed chunks are embedded.
+    """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if max_chunk_size <= 0:
+        raise ValueError("max_chunk_size must be positive")
+    directory = Path(index_directory)
+    records_path = directory / "records.sqlite3"
+    if incremental and not records_path.is_file():
+        raise FileNotFoundError("Incremental state missing. Run index_semantic first.")
+
+    chunks = chunk_corpus(load_corpus(corpus_directory), max_chunk_size)
+    store = load_semantic_index(
+        directory, embedding_model, batch_size, create=not incremental,
     )
-    from src.bonus.storage import save_hnsw_index
-
-    corpus = load_corpus(corpus_directory)
-
-    chunks = chunk_corpus(corpus=corpus, max_chunk_size=max_chunk_size)
-
-    if embedding_model is None:
-        embedding_model = load_embedding_model(embedding_model_id)
-
-    index = build_semantic_index(
-        chunks=chunks,
-        embedding_model=embedding_model,
-        embedding_model_id=embedding_model_id,
-        batch_size=batch_size,
-        m=m,
-        ef_construction=ef_construction,
-        ef_search=ef_search,
+    records = SQLRecordManager(
+        namespace=COLLECTION_NAME,
+        db_url=URL.create("sqlite", database=str(records_path.resolve())),
     )
-
-    save_hnsw_index(index=index, directory=index_directory)
-
-    file_hashes = hash_corpus_files(corpus_directory)
-    state = build_incremental_state(file_hashes=file_hashes, semantic_index=index)
-    resolved_state_path = (
-        Path(state_path)
-        if state_path is not None
-        else Path(index_directory) / "incremental_state.joblib"
-    )
-    save_incremental_state(state=state, path=resolved_state_path)
-
-    return index
+    try:
+        records.create_schema()
+        if not incremental:
+            store.reset_collection()
+        return index(
+            [chunk_to_document(chunk) for chunk in chunks],
+            records,
+            store,
+            cleanup="full",
+            source_id_key="file_path",
+            batch_size=batch_size,
+            force_update=not incremental,
+            key_encoder="sha256",
+        )
+    finally:
+        records.engine.dispose()

@@ -2,10 +2,12 @@ import fire
 
 from src.bonus.embeddings import DEFAULT_EMBEDDING_BATCH_SIZE
 from src.bonus.hybrid import retrieve_hybrid_chunks
-from src.bonus.incremental import update_semantic_corpus
-from src.bonus.indexing import DEFAULT_SEMANTIC_INDEX_DIRECTORY, index_semantic_corpus
+from src.bonus.indexing import (
+    DEFAULT_SEMANTIC_INDEX_DIRECTORY,
+    index_semantic_corpus,
+    load_semantic_index,
+)
 from src.bonus.search import retrieve_semantic_chunks
-from src.bonus.storage import load_hnsw_index
 from src.cli import print_chunks
 from src.indexing.pipeline import (
     DEFAULT_CORPUS_DIRECTORY,
@@ -23,14 +25,14 @@ def index_semantic(
 ) -> None:
     """Build and save the semantic HNSW index."""
 
-    semantic_index = index_semantic_corpus(
+    result = index_semantic_corpus(
         corpus_directory=corpus_directory,
         index_directory=index_directory,
         max_chunk_size=max_chunk_size,
         batch_size=batch_size,
     )
 
-    print(f"Indexed {semantic_index.active_count} semantic chunks.")
+    print(f"Indexed {result['num_added'] + result['num_updated']} semantic chunks.")
     print(f"Saved semantic index to: {index_directory}")
 
 
@@ -39,31 +41,25 @@ def index_incremental(
     index_directory: str = str(DEFAULT_SEMANTIC_INDEX_DIRECTORY),
     max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
-    state_path: str | None = None,
 ) -> None:
     """Update changed files in the semantic index."""
 
-    semantic_index, changes = update_semantic_corpus(
+    result = index_semantic_corpus(
         corpus_directory=corpus_directory,
         index_directory=index_directory,
         max_chunk_size=max_chunk_size,
         batch_size=batch_size,
-        state_path=state_path,
+        incremental=True,
     )
 
-    if not changes.has_changes:
+    if not (result['num_added'] or result['num_updated'] or result['num_deleted']):
         print("No corpus changes detected.")
     else:
-        for file_path in changes.added:
-            print(f"Added: {file_path}")
-
-        for file_path in changes.modified:
-            print(f"Modified: {file_path}")
-
-        for file_path in changes.deleted:
-            print(f"Deleted: {file_path}")
-
-    print(f"Active semantic chunks: {semantic_index.active_count}")
+        print(
+            f"Chunks: {result['num_added']} added, "
+            f"{result['num_updated']} updated, {result['num_deleted']} deleted, "
+            f"{result['num_skipped']} unchanged."
+        )
     print(f"Saved semantic index to: {index_directory}")
 
 
@@ -72,7 +68,7 @@ def search_semantic(
 ) -> None:
     """Search the semantic index for relevant chunks."""
 
-    semantic_index = load_hnsw_index(index_directory)
+    semantic_index = load_semantic_index(index_directory)
 
     chunks = retrieve_semantic_chunks(index=semantic_index, query=query, k=k)
 
@@ -92,7 +88,7 @@ def search_hybrid(
     """Search lexical and semantic indexes together."""
 
     bm25_index = load_bm25_index(index_path)
-    semantic_index = load_hnsw_index(semantic_index_directory)
+    semantic_index = load_semantic_index(semantic_index_directory)
 
     chunks = retrieve_hybrid_chunks(
         bm25_index=bm25_index, semantic_index=semantic_index, query=query, k=k

@@ -447,31 +447,54 @@ moulinette.
 ## Optional Features
 
 Bonus implementation lives in `src/bonus/`, with its tests in `tests/bonus/`.
+The suite includes the existing 59 mandatory tests and 25 bonus tests.
 The mandatory BM25 pipeline and commands keep their original implementation.
 
-| File | Responsibility |
-|---|---|
-| `embeddings.py` | Load MiniLM on CPU and embed chunk batches |
-| `indexing.py` | Build HNSW and index the semantic corpus |
-| `storage.py` | Save and load the semantic graph and metadata |
-| `search.py` | Embed a query and retrieve nearest chunks |
-| `hybrid.py` | Combine BM25 and semantic rankings with RRF |
-| `incremental.py` | Detect file changes and update their semantic vectors |
-| `cli.py` | Connect the four existing bonus commands |
+| File | Responsibility | Library component |
+|---|---|---|
+| `embeddings.py` | Load MiniLM on CPU with batching and progress | `HuggingFaceEmbeddings` |
+| `indexing.py` | Index, persist and update semantic chunks | `Chroma`, `index()`, `SQLRecordManager` |
+| `search.py` | Retrieve nearest chunks with exact source offsets | `Chroma.similarity_search()` |
+| `hybrid.py` | Combine existing BM25 and semantic rankings | `EnsembleRetriever` with RRF |
+| `cli.py` | Connect the four bonus commands | Python Fire |
 
 ```bash
+uv sync
 uv run python -m src index_semantic
 uv run python -m src search_semantic "How does vLLM load LoRA adapters?" --k 5
 uv run python -m src search_hybrid "How does vLLM load LoRA adapters?" --k 5
 uv run python -m src index_incremental
 ```
 
-Incremental indexing updates the semantic index only. If the corpus changes and
-hybrid search must use current lexical results too, run the mandatory `index`
-command to refresh BM25. Incremental indexing requires the state saved by
-`index_semantic`; it reports a clear error if that state is missing.
+Chroma keeps a local persistent HNSW collection using cosine distance. MiniLM
+runs on CPU; no vector database server is required. Source paths and exact
+character ranges are preserved in document metadata. Hybrid retrieval uses
+both rankings with equal weights and RRF constant 60. Deduplication uses the
+source path and offsets, so identical text in different locations stays distinct.
 
-Existing semantic metadata and incremental state remain loadable through two
-small compatibility modules in `src/indexing/`. They contain no indexing logic.
-Caching and the local HTTP API are still pending. See `REFACTOR_NOTES.md` for the
-scope, verification results, and how to apply this refactor to an existing checkout.
+`index_semantic` rebuilds the semantic collection. `index_incremental` scans
+and chunks the complete corpus, then LangChain compares content and metadata
+hashes against its SQLite record manager. Only new or changed chunks are
+embedded and inserted; unchanged vectors are retained. Full cleanup removes
+obsolete chunks, including those belonging to deleted, empty or non-UTF-8
+files. This cleanup mode must receive the complete corpus, never a subset.
+The command reports chunk counts rather than per-file change classifications.
+
+Both commands accept `--corpus_directory`, `--index_directory`,
+`--max_chunk_size` and `--batch_size`. The index directory contains Chroma's
+`chroma.sqlite3` and HNSW files plus LangChain's `records.sqlite3`. Incremental
+updates require this saved state. The old `--state_path` argument has been
+removed because the record manager is stored alongside the collection.
+
+This storage format replaces the earlier `hnsw.bin` / Joblib implementation.
+After updating the code, run `index_semantic` once to rebuild the semantic
+index; old semantic artifacts are not loaded by these commands. BM25 storage
+keeps its existing format. If the corpus changes and hybrid search needs
+current lexical results too, run the mandatory `index` command to refresh BM25.
+
+The bonus adds Chroma, LangChain Classic and SQLAlchemy dependencies in exchange
+for removing custom graph storage, label management, change tracking and rank
+fusion. Tests exercise the real local vector store and record manager with
+small deterministic embeddings, including reopening the collection in another
+process. They do not download model weights or measure recall on the full corpus.
+Caching and the local HTTP API are still pending.

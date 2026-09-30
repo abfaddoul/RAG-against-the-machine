@@ -6,14 +6,16 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fire>=0.7.1",
-    "hnswlib>=0.8.0",
     "joblib>=1.6.0",
     "langchain>=1.4.2",
+    "langchain-chroma>=1.1.0,<2",
+    "langchain-classic>=1.0.8,<2",
     "langchain-huggingface>=1.2.2",
     "langchain-text-splitters>=1.1.2",
     "pydantic>=2.13.5",
     "rank-bm25>=0.2.2",
     "sentence-transformers>=6.1.0",
+    "sqlalchemy[asyncio]>=2.0,<3",
     "torch>=2.6.0",
     "tqdm>=4.70.1",
     "transformers>=4.51.0",
