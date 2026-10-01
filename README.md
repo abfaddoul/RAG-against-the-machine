@@ -446,55 +446,85 @@ moulinette.
 
 ## Optional Features
 
-Bonus implementation lives in `src/bonus/`, with its tests in `tests/bonus/`.
-The suite includes the existing 59 mandatory tests and 25 bonus tests.
-The mandatory BM25 pipeline and commands keep their original implementation.
+The bonus package lives in `src/bonus/` and provides CPU semantic
+search and hybrid retrieval.
 
-| File | Responsibility | Library component |
-|---|---|---|
-| `embeddings.py` | Load MiniLM on CPU with batching and progress | `HuggingFaceEmbeddings` |
-| `indexing.py` | Index, persist and update semantic chunks | `Chroma`, `index()`, `SQLRecordManager` |
-| `search.py` | Retrieve nearest chunks with exact source offsets | `Chroma.similarity_search()` |
-| `hybrid.py` | Combine existing BM25 and semantic rankings | `EnsembleRetriever` with RRF |
-| `cli.py` | Connect the four bonus commands | Python Fire |
+### Semantic indexing
+
+The embedding model is `sentence-transformers/all-MiniLM-L6-v2`,
+loaded through LangChain's `HuggingFaceEmbeddings`. It runs on CPU
+and produces normalized 384-dimensional vectors.
+
+Chroma stores chunk texts, embeddings and source metadata locally.
+Its HNSW index uses cosine distance.
+
+Build the semantic index:
 
 ```bash
-uv sync
 uv run python -m src index_semantic
-uv run python -m src search_semantic "How does vLLM load LoRA adapters?" --k 5
-uv run python -m src search_hybrid "How does vLLM load LoRA adapters?" --k 5
-uv run python -m src index_incremental
 ```
 
-Chroma keeps a local persistent HNSW collection using cosine distance. MiniLM
-runs on CPU; no vector database server is required. Source paths and exact
-character ranges are preserved in document metadata. Hybrid retrieval uses
-both rankings with equal weights and RRF constant 60. Deduplication uses the
-source path and offsets, so identical text in different locations stays distinct.
+Custom corpus, output directory and embedding batch size:
 
-`index_semantic` rebuilds the semantic collection. `index_incremental` scans
-and chunks the complete corpus, then LangChain compares content and metadata
-hashes against its SQLite record manager. Only new or changed chunks are
-embedded and inserted; unchanged vectors are retained. Full cleanup removes
-obsolete chunks, including those belonging to deleted, empty or non-UTF-8
-files. This cleanup mode must receive the complete corpus, never a subset.
-The command reports chunk counts rather than per-file change classifications.
+```bash
+uv run python -m src index_semantic \
+  --corpus_directory=data/raw \
+  --index_directory=data/processed/semantic_index \
+  --batch_size=32
+```
 
-Both commands accept `--corpus_directory`, `--index_directory`,
-`--max_chunk_size` and `--batch_size`. The index directory contains Chroma's
-`chroma.sqlite3` and HNSW files plus LangChain's `records.sqlite3`. Incremental
-updates require this saved state. The old `--state_path` argument has been
-removed because the record manager is stored alongside the collection.
+Every indexing run resets the `rag_chunks` collection and rebuilds
+the complete semantic index. Incremental indexing is not supported.
 
-This storage format replaces the earlier `hnsw.bin` / Joblib implementation.
-After updating the code, run `index_semantic` once to rebuild the semantic
-index; old semantic artifacts are not loaded by these commands. BM25 storage
-keeps its existing format. If the corpus changes and hybrid search needs
-current lexical results too, run the mandatory `index` command to refresh BM25.
+The first model load may download the pretrained weights. Subsequent
+loads reuse the locally cached model files.
 
-The bonus adds Chroma, LangChain Classic and SQLAlchemy dependencies in exchange
-for removing custom graph storage, label management, change tracking and rank
-fusion. Tests exercise the real local vector store and record manager with
-small deterministic embeddings, including reopening the collection in another
-process. They do not download model weights or measure recall on the full corpus.
-Caching and the local HTTP API are still pending.
+### Semantic search
+
+Search the persisted semantic index:
+
+```bash
+uv run python -m src search_semantic \
+  --query="How does vLLM manage the KV cache?" \
+  --k=5
+```
+
+The query is embedded with the same model used during indexing.
+Chroma retrieves the nearest chunks, which are returned with their
+file paths and character offsets.
+
+### Hybrid search
+
+Hybrid search combines the mandatory BM25 retriever with semantic
+retrieval using LangChain's `EnsembleRetriever`.
+
+Both retrievers have equal weights. Reciprocal Rank Fusion uses
+`c=60`, and chunks are deduplicated by file path and character offsets.
+
+Build both indexes from the same corpus before searching:
+
+```bash
+uv run python -m src index
+uv run python -m src index_semantic
+```
+
+Run hybrid search:
+
+```bash
+uv run python -m src search_hybrid \
+  --query="How does vLLM manage the KV cache?" \
+  --k=5
+```
+
+Rebuild both indexes after changing the corpus to keep their contents
+consistent.
+
+### Validation
+
+```bash
+make lint
+make test
+```
+
+Bonus tests use deterministic embeddings and temporary Chroma
+databases, without downloading the embedding model.

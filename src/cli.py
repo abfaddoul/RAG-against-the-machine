@@ -229,7 +229,7 @@ def answer_dataset(
 def run_cli() -> None:
     """Run the command-line interface."""
     if len(sys.argv) > 1 and sys.argv[1] in {
-        "index_semantic", "index_incremental", "search_semantic", "search_hybrid",
+        "index_semantic", "search_semantic", "search_hybrid",
     }:
         from src.bonus.cli import run_cli as run_bonus_cli
 

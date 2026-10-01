@@ -68,6 +68,9 @@ def generate_answer(
         extract_message_text(response)
     )
 
+    if not answer:
+        raise ValueError("Model returned an empty answer after cleaning")
+
     return MinimalAnswer(
         question_id=search_result.question_id,
         question=search_result.question,
