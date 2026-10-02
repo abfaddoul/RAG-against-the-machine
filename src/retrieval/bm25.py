@@ -34,6 +34,8 @@ def retrieve_chunks(
                 break
 
     def get_score(position: int) -> float:
+        """Return the BM25 score for a chunk position."""
+
         return float(scores[position])
 
     ranked_positions = sorted(

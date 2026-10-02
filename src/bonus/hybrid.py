@@ -20,6 +20,7 @@ def retrieve_hybrid_chunks(
     candidate_count = max(10, k * 2)
 
     def lexical_search(text: str) -> list[Document]:
+        """Retrieve BM25 chunks and convert them to LangChain documents."""
         chunks = retrieve_chunks(bm25_index, text, candidate_count)
         return [chunk_to_document(chunk) for chunk in chunks]
 

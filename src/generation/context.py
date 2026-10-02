@@ -3,7 +3,7 @@ from pathlib import Path
 from src.models import MinimalSource
 
 
-MAX_CONTEXT_CHARACTERS = 24_000
+MAX_CONTEXT_CHARACTERS = 12_000
 
 
 def read_source_text(source: MinimalSource) -> str:

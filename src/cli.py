@@ -7,17 +7,28 @@ from src.chunking.models import Chunk
 from src.evaluation.recall import calculate_recall_at_k
 from src.generation.answer import generate_answer, generate_answers
 from src.generation.model import DEFAULT_MAX_NEW_TOKENS, load_chat_model
+from src.query_cache import cached_search, clear_query_cache
+from src.retrieval.bm25 import retrieve_chunks
+from src.json_io import load_json_model, save_json_model
+from src.indexing.storage import load_bm25_index
 from src.indexing.pipeline import (
     DEFAULT_CORPUS_DIRECTORY,
     DEFAULT_INDEX_PATH,
     DEFAULT_MAX_CHUNK_SIZE,
     index_corpus,
 )
-from src.indexing.storage import load_bm25_index
-from src.json_io import load_json_model, save_json_model
-from src.models import RagDataset, StudentSearchResults, UnansweredQuestion
-from src.retrieval.bm25 import retrieve_chunks
-from src.retrieval.search import retrieve_dataset, retrieve_question
+from src.models import (
+    MinimalSearchResults,
+    RagDataset,
+    StudentSearchResults,
+    StudentSearchResultsAndAnswer,
+    UnansweredQuestion,
+)
+from src.retrieval.search import (
+    chunk_to_source,
+    retrieve_dataset,
+    retrieve_question,
+)
 
 
 def print_chunks(chunks: list[Chunk]) -> None:
@@ -40,6 +51,8 @@ def index(
 ) -> None:
     """Build and save the BM25 index."""
 
+    clear_query_cache()
+
     bm25_index = index_corpus(
         corpus_directory=corpus_directory,
         index_path=index_path,
@@ -54,22 +67,43 @@ def search(
     query: str,
     k: int = 5,
     index_path: str = str(DEFAULT_INDEX_PATH),
+    output_path: str = "data/output/search_results/single_query.json",
 ) -> None:
-    """Search the BM25 index for relevant chunks."""
+    """Search one question and save its sources as JSON."""
 
-    bm25_index = load_bm25_index(index_path)
-
-    chunks = retrieve_chunks(
-        index=bm25_index,
+    chunks = cached_search(
+        mode="bm25",
         query=query,
         k=k,
+        index_paths=(index_path,),
+        search=lambda: retrieve_chunks(
+            index=load_bm25_index(index_path),
+            query=query,
+            k=k,
+        ),
     )
+
+    question = UnansweredQuestion(question=query)
+
+    search_result = MinimalSearchResults(
+        question_id=question.question_id,
+        question=question.question,
+        retrieved_sources=[chunk_to_source(chunk) for chunk in chunks],
+    )
+
+    save_json_model(
+        model=StudentSearchResults(
+            search_results=[search_result],
+            k=k,
+        ),
+        path=output_path,
+    )
+
+    print(f"Saved search results to {output_path}")
 
     if not chunks:
         print("No relevant sources found.")
         return
-
-    print_chunks(chunks)
 
 
 def search_dataset(
@@ -153,8 +187,9 @@ def answer(
     k: int = 5,
     index_path: str = str(DEFAULT_INDEX_PATH),
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    output_path: str = "data/output/search_results_and_answer/single_query.json",
 ) -> None:
-    """Retrieve sources and answer one question."""
+    """Answer one question and save its answer and sources as JSON."""
 
     bm25_index = load_bm25_index(index_path)
 
@@ -176,6 +211,16 @@ def answer(
         search_result=search_result,
         model=model,
     )
+
+    save_json_model(
+        model=StudentSearchResultsAndAnswer(
+            search_results=[generated_answer],
+            k=k,
+        ),
+        path=output_path,
+    )
+
+    print(f"Saved generated answer to {output_path}")
 
     print("\nAnswer:")
     print(generated_answer.answer)

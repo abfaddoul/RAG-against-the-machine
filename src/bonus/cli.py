@@ -15,6 +15,7 @@ from src.indexing.pipeline import (
     DEFAULT_MAX_CHUNK_SIZE,
 )
 from src.indexing.storage import load_bm25_index
+from src.query_cache import cached_search, clear_query_cache
 
 
 def index_semantic(
@@ -24,12 +25,16 @@ def index_semantic(
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
 ) -> None:
     """Rebuild and save the semantic index."""
+
+    clear_query_cache()
+
     count = index_semantic_corpus(
         corpus_directory=corpus_directory,
         index_directory=index_directory,
         max_chunk_size=max_chunk_size,
         batch_size=batch_size,
     )
+
     print(f"Indexed {count} semantic chunks.")
     print(f"Saved semantic index to: {index_directory}")
 
@@ -40,13 +45,23 @@ def search_semantic(
     index_directory: str = str(DEFAULT_SEMANTIC_INDEX_DIRECTORY),
 ) -> None:
     """Search the semantic index for relevant chunks."""
-    semantic_index = load_semantic_index(index_directory)
-    chunks = retrieve_semantic_chunks(
-        index=semantic_index, query=query, k=k,
+
+    chunks = cached_search(
+        mode="semantic",
+        query=query,
+        k=k,
+        index_paths=(index_directory,),
+        search=lambda: retrieve_semantic_chunks(
+            index=load_semantic_index(index_directory),
+            query=query,
+            k=k,
+        ),
     )
+
     if not chunks:
         print("No relevant sources found.")
         return
+
     print_chunks(chunks)
 
 
@@ -57,17 +72,24 @@ def search_hybrid(
     semantic_index_directory: str = str(DEFAULT_SEMANTIC_INDEX_DIRECTORY),
 ) -> None:
     """Search lexical and semantic indexes together."""
-    bm25_index = load_bm25_index(index_path)
-    semantic_index = load_semantic_index(semantic_index_directory)
-    chunks = retrieve_hybrid_chunks(
-        bm25_index=bm25_index,
-        semantic_index=semantic_index,
+
+    chunks = cached_search(
+        mode="hybrid",
         query=query,
         k=k,
+        index_paths=(index_path, semantic_index_directory),
+        search=lambda: retrieve_hybrid_chunks(
+            bm25_index=load_bm25_index(index_path),
+            semantic_index=load_semantic_index(semantic_index_directory),
+            query=query,
+            k=k,
+        ),
     )
+
     if not chunks:
         print("No relevant sources found.")
         return
+
     print_chunks(chunks)
 
 

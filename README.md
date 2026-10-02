@@ -4,149 +4,21 @@
 
 ## Description
 
-RAG Against the Machine is a Retrieval-Augmented Generation (RAG) system that
-answers questions about the vLLM codebase.
+A Retrieval-Augmented Generation (RAG) system for answering questions about the
+provided vLLM codebase. It reads source code and documentation, splits them into
+chunks, builds a persistent BM25 index, retrieves relevant source locations, and
+uses the local `Qwen/Qwen3-0.6B` model to generate answers from those sources.
 
-The project ingests vLLM source code and documentation, splits the files into
-searchable chunks, builds a persistent BM25 index, retrieves the most relevant
-source locations for a question, and sends their text to the local
-`Qwen/Qwen3-0.6B` model to generate a grounded answer.
-
-The project also evaluates retrieval quality with recall@k. The official public
-dataset requirements are at least 80% Recall@5 for documentation questions and
-50% Recall@5 for source-code questions.
-
-## Features
-
-- Separate chunking strategies for Python and Markdown/text files
-- Exact source paths and character-range tracking
-- Persistent BM25 index
-- Top-k retrieval for one question or a complete dataset
-- Structured JSON input and output validated with Pydantic
-- Recall@k evaluation with source-span overlap
-- Local answer generation with `Qwen/Qwen3-0.6B`
-- Batch progress bars with `tqdm`
-- Python Fire command-line interface
-- Unit tests, Flake8, and Mypy validation
-
-## System Architecture
-
-```text
-vLLM corpus
-    |
-    v
-File ingestion
-    |
-    v
-Python or Markdown/text chunking
-    |
-    v
-Tokenization and BM25 indexing
-    |
-    v
-Persistent index in data/processed/
-    |
-    v
-Question -> top-k retrieval -> source locations
-    |
-    v
-Source text extraction and context construction
-    |
-    v
-Prompt construction -> Qwen/Qwen3-0.6B
-    |
-    v
-Grounded answer with retrieved sources
-```
-
-The main components are:
-
-- `src/ingestion/`: discovers and reads useful corpus files.
-- `src/chunking/`: selects a language-aware splitter and preserves source spans.
-- `src/indexing/`: tokenizes chunks, builds BM25, and persists the index.
-- `src/retrieval/`: ranks chunks and produces minimal source locations.
-- `src/evaluation/`: calculates recall@k using file and span overlap.
-- `src/generation/`: builds context and prompts, loads Qwen, and generates answers.
-- `src/cli.py`: connects all stages through Python Fire commands.
-
-## Chunking Strategy
-
-The corpus uses two distinct LangChain-based strategies:
-
-- Python files use a Python-aware recursive splitter so code structures are kept
-  together when possible.
-- Markdown and plain-text files use a Markdown/text recursive splitter that prefers
-  natural section, paragraph, and line boundaries.
-
-`--max_chunk_size` is configurable and defaults to 2000 characters, as required by
-the subject. The current implementation uses an effective target of:
-
-```text
-min(max_chunk_size, 1000)
-```
-
-The 1000-character target was selected after retrieval tuning. It improved source
-localization while ensuring that no retrieved source exceeds the moulinette limit of
-2000 characters.
-
-Each chunk stores:
-
-- Its project-relative file path
-- Its first character index
-- Its last character index
-- Its original text
-
-This metadata allows retrieval results to point back to exact regions of the corpus.
-
-## Retrieval Method
-
-The project uses BM25, implemented with `rank-bm25`.
-
-During indexing:
-
-1. Every selected corpus file is split into chunks.
-2. Each chunk is normalized and tokenized.
-3. BM25 document statistics are calculated.
-4. The BM25 object and chunk metadata are persisted with Joblib.
-
-During retrieval:
-
-1. The question is tokenized with the same tokenizer.
-2. BM25 calculates a relevance score for every indexed chunk.
-3. Chunks are ranked by score.
-4. The top-k chunks are returned as `MinimalSource` objects.
-
-BM25 was chosen because it is fast on CPU, works well with exact identifiers found in
-source code, and satisfies the mandatory lexical-retrieval requirement without an
-external vector database.
-
-## Data Models and Output
-
-Pydantic models validate the boundaries between all pipeline stages:
-
-- `MinimalSource`
-- `UnansweredQuestion`
-- `AnsweredQuestion`
-- `RagDataset`
-- `MinimalSearchResults`
-- `MinimalAnswer`
-- `StudentSearchResults`
-- `StudentSearchResultsAndAnswer`
-
-Search commands write `StudentSearchResults` JSON. Batch answer generation writes
-`StudentSearchResultsAndAnswer` JSON. Source paths remain relative to the project root
-and match the ingested corpus paths exactly.
+The mandatory pipeline supports single questions, JSON datasets, and recall@k
+evaluation. Optional features add CPU semantic embeddings, hybrid retrieval,
+and persistent query-result caching.
 
 ## Instructions
 
-### Requirements
-
-- Python `>=3.11,<3.14`
-- `uv`
-- Enough disk space for PyTorch, Transformers, and model weights
-- CPU execution is supported; a GPU is optional
-
 ### Installation
+
+Requirements: Python `>=3.11,<3.14`, `uv`, and enough disk space for dependencies
+and model weights. The model configuration uses CPU execution.
 
 ```bash
 git clone https://github.com/abfaddoul/RAG-against-the-machine.git
@@ -154,7 +26,43 @@ cd RAG-against-the-machine
 uv sync
 ```
 
-On systems with a small home partition, the caches can be moved to a larger disk:
+Place the supplied vLLM repository in `data/raw/vllm-0.10.1/`. Place the supplied
+datasets in `data/datasets/UnansweredQuestions/` and
+`data/datasets/AnsweredQuestions/`.
+
+| Path | Purpose |
+| --- | --- |
+| `src/` | Python implementation and CLI |
+| `data/raw/vllm-0.10.1/` | Provided code and documentation |
+| `data/datasets/UnansweredQuestions/` | Questions used for batch retrieval |
+| `data/datasets/AnsweredQuestions/` | Reference questions and sources |
+| `data/processed/` | Generated indexes and query cache |
+| `data/output/search_results/<DatasetScope>/` | Batch search JSON |
+| `data/output/search_results_and_answer/<DatasetScope>/` | Batch answer JSON |
+
+Run commands from the project root with relative corpus paths. Source paths must
+match the reference datasets exactly, including the `data/raw/vllm-0.10.1/`
+prefix. Large data files, indexes, outputs, and model weights are excluded from
+Git; the evaluation environment supplies or generates them.
+
+### Makefile
+
+| Command | Action |
+| --- | --- |
+| `make install` | Install dependencies with `uv sync` |
+| `make run` | Open the Fire CLI |
+| `make debug` | Run the CLI with `pdb` |
+| `make clean` | Remove Python and development caches |
+| `make lint` | Run Flake8 and the required Mypy checks |
+| `make lint-strict` | Run Flake8 and Mypy in strict mode |
+
+`make clean` removes development caches. Query results and indexes are stored
+under `data/processed/`; indexing commands clear the query cache when rebuilding.
+
+### Storage on Campus Machines
+
+If the home partition is small, use a larger filesystem for dependency and model
+caches before installation or model loading:
 
 ```bash
 export UV_CACHE_DIR=/goinfre/$USER/.cache/uv
@@ -162,67 +70,50 @@ export HF_HOME=/goinfre/$USER/.cache/huggingface
 uv sync
 ```
 
-### Prepare the Data
-
-The expected evaluation layout is:
-
-```text
-data/
-|-- raw/
-|   `-- vllm-0.10.1/
-|-- datasets/
-|   |-- AnsweredQuestions/
-|   `-- UnansweredQuestions/
-|-- processed/
-`-- output/
-    |-- search_results/
-    `-- search_results_and_answer/
-```
-
-The large corpus, datasets, indexes, generated outputs, and model weights are not
-committed to Git. Place the provided vLLM repository under
-`data/raw/vllm-0.10.1/` and the provided datasets under the matching
-`data/datasets/` directories before running the pipeline.
-
-### Makefile Commands
-
-```bash
-make install
-make run
-make debug
-make clean
-make lint
-make test
-```
-
-`make lint` runs the mandatory Flake8 and Mypy checks.
+The first model load downloads weights; later runs reuse the downloaded files.
 
 ## Example Usage
 
-Every command is executed from the repository root with:
+Every command follows `uv run python -m src <command> [options]`. Input, index,
+and output locations can be configured through CLI arguments.
 
-```text
-uv run python -m src <command> [options]
-```
-
-### 1. Build the Index
+### Index the Corpus
 
 ```bash
 uv run python -m src index \
+  --corpus_directory data/raw \
+  --index_path data/processed/bm25_index.joblib \
   --max_chunk_size 2000
 ```
 
-The index is saved under `data/processed/`.
-
-### 2. Search One Question
+### Search One Question
 
 ```bash
-uv run python -m src search \
-  "What is LoRA?" \
-  --k 5
+uv run python -m src search "What is vLLM?" \
+  --k 5 \
+  --output_path data/output/search.json
 ```
 
-### 3. Search a Dataset
+The command saves JSON and prints its destination. Its default output is
+`data/output/search_results/single_query.json`.
+
+### Answer One Question
+
+```bash
+uv run python -m src answer "How does vLLM support LoRA?" \
+  --k 5 \
+  --max_new_tokens 256 \
+  --output_path data/output/answer.json
+```
+
+The answer and its source locations are saved as JSON; the answer is also printed
+in the terminal. The default output is
+`data/output/search_results_and_answer/single_query.json`.
+
+Running either single-question command again with the same output path replaces
+the previous file. Use a different `--output_path` to keep separate results.
+
+### Search a Dataset
 
 ```bash
 uv run python -m src search_dataset \
@@ -231,13 +122,15 @@ uv run python -m src search_dataset \
   --save_directory data/output/search_results/UnansweredQuestions
 ```
 
-The command writes:
+The output keeps the dataset filename. Scope the output directory by dataset type
+because the provided answered and unanswered datasets share filenames.
 
-```text
-data/output/search_results/UnansweredQuestions/dataset_docs_public.json
-```
+Repeat the command with the supplied source-code dataset path to evaluate code
+questions.
 
-### 4. Evaluate Retrieval Locally
+### Evaluate Retrieval
+
+The project provides a local recall@k calculation for development:
 
 ```bash
 uv run python -m src evaluate \
@@ -245,10 +138,11 @@ uv run python -m src evaluate \
   --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json
 ```
 
-The official score is calculated by the separate moulinette executable, which is never
-imported or called by the project:
+For the official evaluation, run the supplied moulinette separately. Rename the
+appropriate platform executable to `moulinette` and give it execution permission:
 
 ```bash
+chmod +x moulinette
 ./moulinette evaluate_student_search_results \
   data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
   data/datasets/AnsweredQuestions/dataset_docs_public.json \
@@ -256,275 +150,282 @@ imported or called by the project:
   --max_context_length 2000
 ```
 
-### 5. Answer One Question
+The student results are the first argument; the ground-truth dataset is the second.
+The project implementation never imports or calls the moulinette.
 
-```bash
-uv run python -m src answer \
-  "What is LoRA and how is it used in vLLM?" \
-  --k 5 \
-  --max_new_tokens 96
-```
-
-### 6. Answer a Dataset
+### Answer a Dataset
 
 ```bash
 uv run python -m src answer_dataset \
   --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
   --save_directory data/output/search_results_and_answer/UnansweredQuestions \
-  --max_new_tokens 96
+  --max_new_tokens 256
 ```
 
-The resulting JSON follows `StudentSearchResultsAndAnswer` and preserves the question,
-retrieved source locations, and generated answer.
+This reuses the saved source locations and keeps the dataset filename in the
+answer output directory. Long-running chunking, batch retrieval, batch generation,
+and embedding operations display progress.
+
+## System Architecture
+
+```mermaid
+flowchart TD
+    corpus["vLLM files"] --> chunking["Read and split files"]
+    chunking --> bm25["Persistent BM25 index"]
+    chunking --> semantic["Persistent Chroma index"]
+    question["Question"] --> retrieval["Lexical, semantic or hybrid retrieval"]
+    bm25 --> retrieval
+    semantic --> retrieval
+    retrieval --> sources["Ranked source locations"]
+    sources --> searchOutput["Search JSON"]
+    sources --> generation["Context, prompt and Qwen"]
+    generation --> answerOutput["Answer JSON"]
+```
+
+| Component | Responsibility |
+| --- | --- |
+| `src/ingestion/` | Discover supported files and read UTF-8 text |
+| `src/chunking/` | Split files and preserve exact character spans |
+| `src/indexing/` | Tokenize, build, and persist BM25 |
+| `src/retrieval/` | Rank chunks and construct search result models |
+| `src/generation/` | Read source spans, build prompts, and run Qwen |
+| `src/evaluation/` | Compare source paths and spans to calculate recall@k |
+| `src/bonus/` | Semantic indexing, semantic search, and hybrid retrieval |
+| `src/query_cache.py` | Cache retrieved chunks for repeated queries |
+| `src/models.py`, `src/json_io.py` | Validate and serialize pipeline data |
+| `src/cli.py` | Expose mandatory commands through Python Fire |
+
+## Chunking Strategy
+
+Ingestion selects `.py`, `.md`, `.rst`, and `.txt` files. It skips empty files,
+files that cannot be decoded as UTF-8, and directories such as `.git`, `.venv`,
+`__pycache__`, and `node_modules`.
+
+Python uses LangChain's `PythonCodeTextSplitter`; Markdown uses
+`MarkdownTextSplitter`; plain text and reStructuredText use
+`RecursiveCharacterTextSplitter`. These recursive strategies prefer suitable
+structural boundaries while keeping chunk sizes bounded.
+
+The CLI defaults to `--max_chunk_size 2000`. The corpus pipeline applies a tuned
+target of `min(max_chunk_size, 1000)` characters, with no overlap. A smaller
+argument reduces the target further. Each chunk retains its original text, file
+path, start offset, and end offset. The original slice is checked against the
+chunk text to prevent incorrect source metadata.
+
+Offsets use Python slicing: `text[first_character_index:last_character_index]`.
+The end offset is exclusive. The tuned target keeps retrieved sources below the
+moulinette's 2000-character maximum and improves source localization.
+
+## Retrieval Method
+
+The mandatory retriever uses `BM25Okapi` from `rank-bm25`.
+
+At indexing time, each chunk's file path and text are tokenized together. The
+tokenizer splits camel-case and acronym boundaries, extracts alphanumeric tokens,
+and lowercases them. Including paths gives file names and directory names a role
+in lexical matching. The same tokenizer processes questions.
+
+At query time, BM25 scores the indexed chunks. Chunks containing at least one query
+token are ranked by descending score, and the top-k source spans are returned.
+The index and aligned chunk metadata are persisted using Joblib.
+
+## Data Models and JSON Output
+
+Pydantic validates questions, sources, search results, and generated answers.
+The provided models are implemented in `src/models.py`:
+`MinimalSource`, `UnansweredQuestion`, `AnsweredQuestion`, `RagDataset`,
+`MinimalSearchResults`, `MinimalAnswer`, `StudentSearchResults`, and
+`StudentSearchResultsAndAnswer`.
+
+| Command | JSON model |
+| --- | --- |
+| `search`, `search_dataset` | `StudentSearchResults` |
+| `answer`, `answer_dataset` | `StudentSearchResultsAndAnswer` |
+
+Both output models contain `search_results` and the requested `k`. A
+single-question output contains one result with its `question_id`, `question`,
+and `retrieved_sources`; answer results also contain `answer`. A source records
+its exact `file_path`, `first_character_index`, and `last_character_index`.
+
+Single-question commands generate a UUID for the question. Dataset commands
+preserve dataset question IDs so evaluation can match results to references.
+Searches with no matches still save a result with an empty source list. JSON uses
+UTF-8, and missing output directories are created automatically.
 
 ## Answer Generation
 
-The generation stack is:
+The system reads the retrieved source spans, labels them with paths and offsets,
+and combines them into context. Context construction uses a 12,000-character
+limit. This is a character bound, rather than tokenizer-based budget accounting.
 
-```text
-Qwen/Qwen3-0.6B
-    -> Transformers text-generation pipeline
-    -> HuggingFacePipeline
-    -> ChatHuggingFace
+LangChain builds system and human chat messages. The prompt asks Qwen to answer
+only from the retrieved context and acknowledge insufficient evidence. Generation
+uses Hugging Face Transformers through `HuggingFacePipeline` and `ChatHuggingFace`.
+The default generation limit is 256 new tokens, configurable with
+`--max_new_tokens`.
+
+The prompt requests `/no_think`; generated `<think>...</think>` blocks are removed
+before serialization. The model instance is reused within a Python process, so
+batch generation loads it once. Answer quality depends on the retrieved evidence
+and the capabilities of the small local model.
+
+## Optional Features
+
+### Semantic Embeddings
+
+Semantic indexing uses `sentence-transformers/all-MiniLM-L6-v2` through LangChain's
+`HuggingFaceEmbeddings`, with normalized embeddings and CPU batching. Chroma
+persists texts and source metadata locally and uses an HNSW index with cosine
+distance.
+
+```bash
+uv run python -m src index_semantic \
+  --corpus_directory data/raw \
+  --index_directory data/processed/semantic_index \
+  --max_chunk_size 2000 \
+  --batch_size 32
+
+uv run python -m src search_semantic \
+  "How does vLLM manage the KV cache?" \
+  --k 5 \
+  --index_directory data/processed/semantic_index
 ```
 
-For every question, the system:
+Each semantic indexing run resets and rebuilds the complete `rag_chunks`
+collection. The query uses the same embedding model as the indexed chunks.
 
-1. Reads the exact text spans identified by retrieval.
-2. Labels and joins them into a context string.
-3. Builds separate system and human chat messages.
-4. Instructs Qwen to use only the retrieved context.
-5. Generates and cleans the final answer.
-6. Returns a validated `MinimalAnswer`.
+### Hybrid Retrieval
 
-The model is cached inside a running Python process and reused during batch generation.
-Tests inject a fake chat model so the unit-test suite does not download or run Qwen.
+Hybrid search combines BM25 and Chroma using LangChain's `EnsembleRetriever`.
+Each retriever provides `max(10, 2 * k)` candidates. Reciprocal Rank Fusion uses
+equal weights and `c=60`; source identities combine the path and character span.
+The fused list is deduplicated and reduced to the requested top-k.
+
+Build both indexes from the same corpus before using hybrid search:
+
+```bash
+uv run python -m src index
+uv run python -m src index_semantic
+
+uv run python -m src search_hybrid \
+  "How does vLLM manage the KV cache?" \
+  --k 5 \
+  --index_path data/processed/bm25_index.joblib \
+  --semantic_index_directory data/processed/semantic_index
+```
+
+The optional `search_semantic` and `search_hybrid` commands display retrieved
+chunks in the terminal. The JSON output workflow above applies to the mandatory
+search and answer commands.
+
+### Caching
+
+BM25 and Chroma persist their indexes so retrieval can reuse them across runs.
+`diskcache` stores retrieved chunks for `search`, `search_semantic`, and
+`search_hybrid` under `data/processed/query_cache/`.
+
+Cache keys contain the retrieval mode, resolved index paths, exact query, and k.
+A cache hit reuses saved chunks. The `index` and `index_semantic` commands clear
+the query cache before rebuilding, including when the subsequent build fails.
+After changing corpus files, rebuild the relevant indexes; rebuild both for
+hybrid retrieval.
 
 ## Performance Analysis
 
-The official public-dataset moulinette produced:
+Recorded official public-dataset moulinette results:
 
 | Dataset | Recall@1 | Recall@3 | Recall@5 | Recall@10 | Required Recall@5 |
-|---|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: |
 | Documentation | 60.0% | 76.0% | 80.0% | 83.0% | 80.0% |
 | Source code | 38.4% | 62.6% | 69.7% | 77.8% | 50.0% |
 
-Both mandatory Recall@5 thresholds are reached. The final index contained 29,378 chunks
-created from 1,847 corpus files.
+Both public Recall@5 thresholds are reached. These are recorded results from the
+tested corpus and configuration, rather than guarantees for different datasets.
 
-Smaller chunks improved recall because a retrieved span was less likely to mix unrelated
-topics and was more likely to overlap a precise reference source. The trade-off is a
-larger index and more candidate chunks to score.
+A reference source counts as retrieved when the file path matches exactly and
+the character spans reach an intersection-over-union of at least 0.05. Recall@k
+is averaged across answered questions.
 
-BM25 retrieval is fast because the corpus statistics are precomputed and loaded from the
-persisted index. Generation is the expensive stage on CPU. In one test environment, a
-single 96-token answer took about one minute, while a batch smoke test with ten retrieved
-sources took about 72 seconds for one question. Times vary by hardware, context length,
-and output length.
+The 1000-character target improved source localization during retrieval tuning.
+Smaller chunks provide more precise spans, at the cost of more chunks to index
+and score. BM25 precomputes corpus statistics; answer generation and semantic
+indexing add model computation on CPU. Query caching avoids repeated retrieval
+work for identical search requests.
+
+The subject's mandatory timing targets are at most five minutes for corpus
+indexing and at most 90 seconds for 200 retrieval questions. Measure the lexical
+pipeline on the evaluation machine; model generation and optional semantic
+indexing are separate operations.
 
 ## Design Decisions
 
-- **BM25 instead of mandatory embeddings:** lexical retrieval is lightweight, fast on
-  CPU, and effective for technical identifiers and exact code terms.
-- **Language-aware chunking:** Python and documentation have different structural
-  boundaries and therefore use different splitters.
-- **Tuned 1000-character target:** smaller chunks improved recall while staying safely
-  below the 2000-character evaluator limit.
-- **Exact source metadata:** every result retains the original path and character span
-  required by the evaluator.
-- **Pydantic at stage boundaries:** malformed data is rejected before it propagates
-  through the pipeline.
-- **Persistent BM25 index:** indexing is performed once and retrieval commands reuse the
-  saved index.
-- **Dependency injection for generation tests:** fake models keep tests deterministic,
-  offline, and fast.
-- **Grounded prompt:** the model is told to use only retrieved context and to report when
-  the sources are insufficient.
+- **BM25 for the mandatory pipeline:** CPU-friendly lexical ranking matches
+  technical identifiers and meets the required retrieval-method choice.
+- **Different splitters for code and documentation:** file structure guides
+  segmentation, while exact source slices remain verifiable.
+- **A tuned 1000-character target:** precise spans improve localization while
+  keeping source sizes within the evaluator limit.
+- **Pydantic at stage boundaries:** shared models validate JSON inputs and outputs.
+- **Separate optional modules:** semantic and hybrid retrieval reuse the same
+  source metadata without changing the mandatory BM25 pipeline.
+- **Rank fusion for hybrid retrieval:** RRF combines rankings without comparing
+  BM25 scores directly to semantic distances.
+- **Persistent indexes and query caching:** saved data reduces repeated indexing
+  and retrieval work.
+- **Configurable paths and generation length:** the same CLI supports development
+  and the evaluator's supplied locations.
 
 ## Challenges Faced
 
-### Preserving Exact Character Positions
+- **Exact source offsets:** splitter start indices and slice validation preserve
+  the character ranges required by evaluation.
+- **Recall tuning:** smaller chunks and path-aware tokenization improved matching
+  between natural-language questions and code identifiers.
+- **Corpus path consistency:** relative paths are kept unchanged because the
+  moulinette compares them verbatim.
+- **CPU generation and disk limits:** the small Qwen model, process-level model
+  reuse, configurable output length, and relocated caches keep the workflow usable
+  on campus machines.
+- **Qwen thinking markers:** prompt instructions and answer cleaning prevent
+  thinking tags from appearing in saved answers.
+- **Cache invalidation during rebuilds:** clearing query results before indexing
+  avoids serving old cached chunks after a rebuild attempt.
 
-Recursive splitting can make it difficult to map chunks back to the original file. Chunk
-metadata was designed to retain exact start and end positions so paths and spans remain
-compatible with the evaluator.
+## Validation
 
-### Improving Recall Without Oversized Sources
-
-Large chunks contain more context but reduce localization quality. Testing showed that an
-effective 1000-character target improved Recall@5 while remaining below the 2000-character
-limit.
-
-### Matching Exact Corpus Paths
-
-The moulinette compares file paths verbatim. The ingestion and chunking stages therefore
-preserve project-relative paths beginning with `data/raw/vllm-0.10.1/`.
-
-### Running Qwen on CPU
-
-The evaluation environment may not provide a GPU. The project uses the small mandatory
-Qwen model, a CPU PyTorch installation, process-level model caching, and configurable
-generation length. Batch generation remains slower than retrieval.
-
-### Qwen Thinking Markers
-
-Qwen may return empty `<think>...</think>` markers even when non-thinking behavior is
-requested. The prompt uses `/no_think`, and generated answers are cleaned before being
-stored.
-
-### Limited Home-Directory Storage
-
-PyTorch and model files can require several gigabytes. `UV_CACHE_DIR` and `HF_HOME` can
-be redirected to a larger filesystem without changing the project code.
-
-## Testing and Code Quality
-
-Run static analysis:
+Run the mandatory static checks:
 
 ```bash
 make lint
 ```
 
-Run the unit-test suite:
+Flake8 and Mypy passed for the final CLI changes. Single-question search and answer
+commands were run and produced JSON files. Public-dataset retrieval was checked
+with the supplied moulinette; scores are recorded above.
 
-```bash
-make test
-```
-
-The current suite contains 59 tests covering models, ingestion, chunking, indexing,
-retrieval, evaluation, prompt construction, context extraction, answer cleaning, and
-batch generation.
+For repeatable validation, rebuild the BM25 index, run `search_dataset`, evaluate
+with the moulinette, and run an answer command using the generated sources.
 
 ## Resources
 
-- [Retrieval-Augmented Generation paper](https://arxiv.org/abs/2005.11401)
-- [BM25 and Beyond](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf)
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25)
-- [vLLM documentation](https://docs.vllm.ai/)
+- [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401)
+- [The Probabilistic Relevance Framework: BM25 and Beyond](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf)
+- [rank-bm25 implementation](https://github.com/dorianbrown/rank_bm25)
 - [Qwen3-0.6B model card](https://huggingface.co/Qwen/Qwen3-0.6B)
 - [LangChain documentation](https://docs.langchain.com/)
-- [Hugging Face Transformers documentation](https://huggingface.co/docs/transformers/)
 - [Pydantic documentation](https://docs.pydantic.dev/)
 - [Python Fire documentation](https://google.github.io/python-fire/)
 - [uv documentation](https://docs.astral.sh/uv/)
-- [tqdm documentation](https://tqdm.github.io/)
 
 ### Use of AI
 
-AI was used as a learning and development assistant for:
-
-- Explaining RAG, chunking, BM25, recall@k, LangChain prompts, and model wrappers
-- Reviewing implementation plans and data flow between pipeline stages
-- Suggesting unit-test cases and edge cases
-- Diagnosing dependency, type-checking, storage, and model-loading issues
-- Reviewing CLI integration and helping structure this documentation
-
-All suggested code and explanations were reviewed, understood, adapted, linted, and tested
-before inclusion. Retrieval quality was verified independently with the provided
-moulinette.
-
-## Main Technologies
-
-- Python
-- Pydantic
-- LangChain
-- Hugging Face Transformers
-- PyTorch
-- Qwen
-- rank-bm25
-- Joblib
-- Python Fire
-- tqdm
-- Pytest
-- Mypy
-- Flake8
+AI assisted with explanations of RAG, BM25, embeddings, source-span evaluation,
+and LangChain; implementation reviews; development test ideas; debugging type,
+dependency, storage, and model-loading issues; and README drafting. Suggested
+changes were checked against the project code and subject requirements. Static
+analysis, CLI runs, and the supplied moulinette were used to validate the work.
 
 ## Author
 
 - 42 login: `abdfaddo`
 - GitHub: [abfaddoul](https://github.com/abfaddoul)
-
-## Optional Features
-
-The bonus package lives in `src/bonus/` and provides CPU semantic
-search and hybrid retrieval.
-
-### Semantic indexing
-
-The embedding model is `sentence-transformers/all-MiniLM-L6-v2`,
-loaded through LangChain's `HuggingFaceEmbeddings`. It runs on CPU
-and produces normalized 384-dimensional vectors.
-
-Chroma stores chunk texts, embeddings and source metadata locally.
-Its HNSW index uses cosine distance.
-
-Build the semantic index:
-
-```bash
-uv run python -m src index_semantic
-```
-
-Custom corpus, output directory and embedding batch size:
-
-```bash
-uv run python -m src index_semantic \
-  --corpus_directory=data/raw \
-  --index_directory=data/processed/semantic_index \
-  --batch_size=32
-```
-
-Every indexing run resets the `rag_chunks` collection and rebuilds
-the complete semantic index. Incremental indexing is not supported.
-
-The first model load may download the pretrained weights. Subsequent
-loads reuse the locally cached model files.
-
-### Semantic search
-
-Search the persisted semantic index:
-
-```bash
-uv run python -m src search_semantic \
-  --query="How does vLLM manage the KV cache?" \
-  --k=5
-```
-
-The query is embedded with the same model used during indexing.
-Chroma retrieves the nearest chunks, which are returned with their
-file paths and character offsets.
-
-### Hybrid search
-
-Hybrid search combines the mandatory BM25 retriever with semantic
-retrieval using LangChain's `EnsembleRetriever`.
-
-Both retrievers have equal weights. Reciprocal Rank Fusion uses
-`c=60`, and chunks are deduplicated by file path and character offsets.
-
-Build both indexes from the same corpus before searching:
-
-```bash
-uv run python -m src index
-uv run python -m src index_semantic
-```
-
-Run hybrid search:
-
-```bash
-uv run python -m src search_hybrid \
-  --query="How does vLLM manage the KV cache?" \
-  --k=5
-```
-
-Rebuild both indexes after changing the corpus to keep their contents
-consistent.
-
-### Validation
-
-```bash
-make lint
-make test
-```
-
-Bonus tests use deterministic embeddings and temporary Chroma
-databases, without downloading the embedding model.
